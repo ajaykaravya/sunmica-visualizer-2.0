@@ -1,0 +1,65 @@
+# =========================
+# NEXT.JS (Frontend)
+# =========================
+node_modules/
+.next/
+.next/cache/
+out/
+build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env files
+.env
+.env.local
+.env.development
+.env.production
+
+# =========================
+# PYTHON (Backend)
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Python logs
+*.log
+
+# Python build
+*.egg-info/
+dist/
+build/
+
+# =========================
+# AI / MODELS
+# =========================
+*.pth
+
+# =========================
+# PROJECT SPECIFIC
+# =========================
+backend/uploads/
+
+# =========================
+# COMMON
+# =========================
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Cache
+.cache/
+.ipynb_checkpoints/
