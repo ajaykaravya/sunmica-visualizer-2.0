@@ -220,6 +220,7 @@ export default function Home() {
 
     // Load the texture image
     const textureImg = new Image();
+    textureImg.crossOrigin = "anonymous";
     textureImg.onload = () => {
       // Create a temporary canvas for the texture
       const textureCanvas = document.createElement("canvas");

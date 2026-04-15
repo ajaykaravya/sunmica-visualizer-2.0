@@ -81,8 +81,18 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @app.get("/static_images/{filename}")
 async def get_image(filename: str):
     file_path = os.path.join(UPLOAD_DIR, filename)
-    if os.path.exists(file_path):
-        return FileResponse(file_path)
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    response = FileResponse(file_path)
+    
+    # ✅ FIX: Add CORS headers
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+
+    return response
     raise HTTPException(status_code=404, detail="File not found")
 
 # Add CORS middleware
