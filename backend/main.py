@@ -1,4 +1,6 @@
+from typing import Optional
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
@@ -21,18 +23,18 @@ DB_CONFIG = {
 
 def get_db_connection():
     try:
-        conn = mysql.connector.connect(**DB_CONFIG, database='furniture_images')
+        conn = mysql.connector.connect(**DB_CONFIG, database='sunmica_visualizer')
         return conn
     except mysql.connector.Error as err:
         if err.errno == mysql.connector.errorcode.ER_BAD_DB_ERROR:
             # Auto-create database if it is missing
             setup_conn = mysql.connector.connect(**DB_CONFIG)
             cursor = setup_conn.cursor()
-            cursor.execute("CREATE DATABASE IF NOT EXISTS furniture_images")
+            cursor.execute("CREATE DATABASE IF NOT EXISTS sunmica_visualizer")
             setup_conn.commit()
             cursor.close()
             setup_conn.close()
-            return mysql.connector.connect(**DB_CONFIG, database='furniture_images')
+            return mysql.connector.connect(**DB_CONFIG, database='sunmica_visualizer')
         raise
 
 def init_db():
@@ -40,8 +42,26 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS images (
+            CREATE TABLE IF NOT EXISTS furniture_images (
                 id VARCHAR(36) PRIMARY KEY,
+                filename VARCHAR(255) NOT NULL,
+                url VARCHAR(255) NOT NULL,
+                categoryId VARCHAR(255),
+                furniture_name VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS categories (
+                id VARCHAR(36) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sunmica_images (
+                id VARCHAR(36) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
                 filename VARCHAR(255) NOT NULL,
                 url VARCHAR(255) NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -95,8 +115,12 @@ except Exception as e:
 
 embedding_cache = {}
 
-@app.post("/admin/upload")
-async def admin_upload(file: UploadFile = File(...)):
+@app.post("/furniture/upload")
+async def upload_furniture(
+    file: UploadFile = File(...),
+    categoryId: Optional[str] = Form(default=None),
+    furniture_name: Optional[str] = Form(default=None)
+):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename")
     
@@ -110,12 +134,21 @@ async def admin_upload(file: UploadFile = File(...)):
         f.write(contents)
         
     image_url = f"http://127.0.0.1:8000/static_images/{new_filename}"
-    img_data = {"id": image_id, "filename": new_filename, "url": image_url}
+    img_data = {
+        "id": image_id, 
+        "filename": new_filename, 
+        "url": image_url, 
+        "categoryId": categoryId, 
+        "furniture_name": furniture_name
+    }
     
     # Save standard record mapping to Database persistently
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO images (id, filename, url) VALUES (%s, %s, %s)", (image_id, new_filename, image_url))
+    cursor.execute(
+        "INSERT INTO furniture_images (id, filename, url, categoryId, furniture_name) VALUES (%s, %s, %s, %s, %s)", 
+        (image_id, new_filename, image_url, categoryId, furniture_name)
+    )
     conn.commit()
     cursor.close()
     conn.close()
@@ -137,12 +170,12 @@ async def admin_upload(file: UploadFile = File(...)):
             
     return {"status": "success", "data": img_data}
 
-@app.get("/images")
-async def list_images():
+@app.get("/furniture/images")
+async def list_furniture_images():
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT id, filename, url FROM images ORDER BY created_at DESC")
+        cursor.execute("SELECT id, filename, url, categoryId, furniture_name FROM furniture_images ORDER BY created_at DESC")
         results = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -150,6 +183,128 @@ async def list_images():
     except Exception as e:
         print(f"Error fetching images: {e}")
         return {"status": "error", "images": []}
+
+@app.delete("/furniture/{image_id}")
+async def delete_furniture(image_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute(
+        "SELECT filename FROM furniture_images WHERE id=%s",
+        (image_id,)
+    )
+    result = cursor.fetchone()
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    file_path = os.path.join(UPLOAD_DIR, result["filename"])
+
+    cursor.execute(
+        "DELETE FROM furniture_images WHERE id=%s",
+        (image_id,)
+    )
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    return {"status": "success"}
+
+
+
+
+@app.post("/sunmica/upload")
+async def upload_sunmica(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(default=None)
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename")
+    
+    # Generate unique ID
+    file_extension = file.filename.split(".")[-1]
+    sunmica_id = str(uuid.uuid4())
+    new_filename = f"{sunmica_id}.{file_extension}"
+    file_path = os.path.join(UPLOAD_DIR, new_filename)
+    
+    # Save file
+    contents = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(contents)
+        
+    # Generate URL
+    image_url = f"http://127.0.0.1:8000/static_images/{new_filename}"
+    
+    sunmica_data = {
+        "id": sunmica_id,
+        "name": name,
+        "filename": new_filename,
+        "url": image_url
+    }
+    
+    # Save to DB
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO sunmica_images (id, name, filename, url) VALUES (%s, %s, %s, %s)", 
+        (sunmica_id, name, new_filename, image_url)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return {"status": "success", "data": sunmica_data}
+
+@app.get("/sunmica/images")
+async def list_sunmica_images():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, name, filename, url FROM sunmica_images ORDER BY created_at DESC")
+        results = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "images": results}
+    except Exception as e:
+        print(f"Error fetching images: {e}")
+        return {"status": "error", "images": []}
+
+@app.delete("/sunmica/{sunmica_id}")
+async def delete_sunmica(sunmica_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Get file first
+    cursor.execute(
+        "SELECT filename FROM sunmica_images WHERE id=%s",
+        (sunmica_id,)
+    )
+    result = cursor.fetchone()
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    file_path = os.path.join(UPLOAD_DIR, result["filename"])
+
+    # Delete DB
+    cursor.execute(
+        "DELETE FROM sunmica_images WHERE id=%s",
+        (sunmica_id,)
+    )
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    # Delete file
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    return {"status": "success"}
 
 @app.post("/embed")
 async def embed_image(image_id: str = Form(...)):
@@ -159,7 +314,7 @@ async def embed_image(image_id: str = Form(...)):
     # Fetch mapping exclusively from database
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT filename FROM images WHERE id = %s", (image_id,))
+    cursor.execute("SELECT filename FROM furniture_images WHERE id = %s", (image_id,))
     img_data = cursor.fetchone()
     cursor.close()
     conn.close()
@@ -173,7 +328,7 @@ async def embed_image(image_id: str = Form(...)):
              raise HTTPException(status_code=404, detail="File missing on disk")
              
         # Read from disk
-        image = cv2.imread(file_path)
+            image = cv2.imread(file_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # Ensure correct color format
         
         # Calculate and cache
@@ -220,3 +375,103 @@ async def segment_image(image_id: str = Form(...), x: int = Form(...), y: int = 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+class Category(BaseModel):
+    name: str = Field(..., min_length=1, description="Category name cannot be empty")
+
+@app.post("/categories")
+async def create_category(category: Category):
+    category.name = category.name.strip()
+    if not category.name:
+        raise HTTPException(status_code=400, detail="Category name cannot be empty")
+        
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM categories WHERE name = %s", (category.name,))
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=400, detail="Category with this name already exists")
+            
+        category_id = str(uuid.uuid4())
+        cursor.execute(
+            "INSERT INTO categories (id, name) VALUES (%s, %s)", 
+            (category_id, category.name)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "data": {"id": category_id, "name": category.name}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating category: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create category")
+
+@app.get("/categories")
+async def list_categories():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, name, created_at FROM categories ORDER BY created_at DESC")
+        results = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "categories": results}
+    except Exception as e:
+        print(f"Error fetching categories: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch categories")
+
+@app.put("/categories/{category_id}")
+async def update_category(category_id: str, category: Category):
+    category.name = category.name.strip()
+    if not category.name:
+        raise HTTPException(status_code=400, detail="Category name cannot be empty")
+        
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id FROM categories WHERE name = %s AND id != %s", (category.name, category_id))
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=400, detail="Category with this name already exists")
+
+        cursor.execute("UPDATE categories SET name = %s WHERE id = %s", (category.name, category_id))
+        if cursor.rowcount == 0:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=404, detail="Category not found")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "data": {"id": category_id, "name": category.name}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating category: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update category")
+
+@app.delete("/categories/{category_id}")
+async def delete_category(category_id: str):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM categories WHERE id = %s", (category_id,))
+        if cursor.rowcount == 0:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=404, detail="Category not found")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "message": "Category deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting category: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete category")
