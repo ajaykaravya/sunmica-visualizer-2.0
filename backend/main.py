@@ -328,7 +328,7 @@ async def embed_image(image_id: str = Form(...)):
              raise HTTPException(status_code=404, detail="File missing on disk")
              
         # Read from disk
-            image = cv2.imread(file_path)
+        image = cv2.imread(file_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # Ensure correct color format
         
         # Calculate and cache
