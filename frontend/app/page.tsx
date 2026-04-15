@@ -2,15 +2,17 @@
 
 import { useRef, useState, useEffect } from "react";
 
-const TEXTURE_OPTIONS = [
-  { id: "wood1", label: "Wood Brown", path: "/textures/wood1.jpeg" },
-  { id: "wood2", label: "Wood Light", path: "/textures/wood2.jpeg" },
-  { id: "wood3", label: "Marble White", path: "/textures/wood3.jpeg" },
-  { id: "wood4", label: "Oak Honey", path: "/textures/wood4.jpeg" },
-];
-
-interface ImageRecord {
+interface FurnitureImageRecord {
   id: string;
+  filename: string;
+  url: string;
+  categoryId: string;
+  furniture_name: string;
+}
+
+interface SunmicaImageRecord {
+  id: string;
+  name: string;
   filename: string;
   url: string;
 }
@@ -18,12 +20,19 @@ interface ImageRecord {
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const [availableImages, setAvailableImages] = useState<ImageRecord[]>([]);
+  const [availableFurnitureImages, setAvailableFurnitureImages] = useState<
+    FurnitureImageRecord[]
+  >([]);
+  const [availableSunmicaImages, setAvailableSunmicaImages] = useState<
+    SunmicaImageRecord[]
+  >([]);
   const [activeImageId, setActiveImageId] = useState<string | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isEmbedding, setIsEmbedding] = useState(false);
-  const [selectedTexture, setSelectedTexture] = useState<string>("wood1");
+  const [selectedTextureId, setSelectedTextureId] = useState<string | null>(
+    null,
+  );
   const [history, setHistory] = useState<ImageData[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
@@ -33,7 +42,18 @@ export default function Home() {
       .then((res) => res.json())
       .then((data) => {
         if (data.status === "success") {
-          setAvailableImages(data.images);
+          setAvailableFurnitureImages(data.images);
+        }
+      })
+      .catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/sunmica/images")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.status === "success") {
+          setAvailableSunmicaImages(data.images);
         }
       })
       .catch(console.error);
@@ -46,7 +66,7 @@ export default function Home() {
     }
   }, [image]);
 
-  const handleSelectImage = (record: ImageRecord) => {
+  const handleSelectImage = (record: FurnitureImageRecord) => {
     setActiveImageId(record.id);
 
     // Reset Canvas and History
@@ -175,9 +195,11 @@ export default function Home() {
       const mask = data.mask;
 
       // Apply texture to mask
-      const selectedTexturePath = TEXTURE_OPTIONS.find(
-        (t) => t.id === selectedTexture,
-      )?.path;
+      const selectedTextureObj = availableSunmicaImages.find(
+        (t) => t.id === selectedTextureId,
+      );
+
+      const selectedTexturePath = selectedTextureObj?.url;
       if (selectedTexturePath) {
         applyTexture(mask, selectedTexturePath);
       }
@@ -283,7 +305,7 @@ export default function Home() {
               <h2 className="text-xl font-semibold mb-4 border-b pb-2">
                 Available Furniture Templates
               </h2>
-              {availableImages.length === 0 ? (
+              {availableFurnitureImages.length === 0 ? (
                 <div className="text-center text-gray-500 py-12">
                   <p>No images available.</p>
                   <p className="text-sm mt-2">
@@ -296,7 +318,7 @@ export default function Home() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {availableImages.map((img) => (
+                  {availableFurnitureImages.map((img) => (
                     <div
                       key={img.id}
                       onClick={() => handleSelectImage(img)}
@@ -338,24 +360,26 @@ export default function Home() {
                   Select Sunmica Texture
                 </h2>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {TEXTURE_OPTIONS.map((texture) => (
+                  {availableSunmicaImages.map((texture) => (
                     <button
                       key={texture.id}
-                      onClick={() => setSelectedTexture(texture.id)}
+                      onClick={() => setSelectedTextureId(texture.id)}
                       disabled={isEmbedding}
-                      className={`p-3 rounded-lg border-2 transition-all flex flex-col items-center ${isEmbedding ? "opacity-50 cursor-not-allowed " : ""}${
-                        selectedTexture === texture.id
+                      className={`p-3 rounded-lg border-2 transition-all flex flex-col items-center ${
+                        isEmbedding ? "opacity-50 cursor-not-allowed " : ""
+                      }${
+                        selectedTextureId === texture.id
                           ? "border-blue-500 bg-blue-50"
                           : "border-gray-200 bg-gray-50 hover:border-gray-300"
                       }`}
                     >
                       <img
-                        src={texture.path}
-                        alt={texture.label}
+                        src={texture.url}
+                        alt={texture.name}
                         className="w-full h-20 object-cover rounded-md mb-2 border"
                       />
                       <div className="text-xs font-medium text-center">
-                        {texture.label}
+                        {texture.name}
                       </div>
                     </button>
                   ))}
