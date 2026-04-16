@@ -11,6 +11,10 @@ import os
 import uuid
 from fastapi.responses import FileResponse
 import mysql.connector
+import redis
+import pickle
+import zlib
+
 
 app = FastAPI()
 
@@ -20,6 +24,8 @@ DB_CONFIG = {
     'password': 'root1234',
     'host': '127.0.0.1'
 }
+
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
 def get_db_connection():
     try:
@@ -93,7 +99,6 @@ async def get_image(filename: str):
     response.headers["Access-Control-Allow-Headers"] = "*"
 
     return response
-    raise HTTPException(status_code=404, detail="File not found")
 
 # Add CORS middleware
 app.add_middleware(
@@ -123,8 +128,6 @@ except Exception as e:
     print(f"Error loading SAM model: {e}")
     predictor = None
 
-embedding_cache = {}
-
 @app.post("/furniture/upload")
 async def upload_furniture(
     file: UploadFile = File(...),
@@ -133,52 +136,67 @@ async def upload_furniture(
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename")
-    
+
     file_extension = file.filename.split(".")[-1]
     image_id = str(uuid.uuid4())
     new_filename = f"{image_id}.{file_extension}"
     file_path = os.path.join(UPLOAD_DIR, new_filename)
-    
+
     contents = await file.read()
     with open(file_path, "wb") as f:
         f.write(contents)
-        
+
     image_url = f"http://127.0.0.1:8000/static_images/{new_filename}"
-    img_data = {
-        "id": image_id, 
-        "filename": new_filename, 
-        "url": image_url, 
-        "categoryId": categoryId, 
-        "furniture_name": furniture_name
-    }
-    
-    # Save standard record mapping to Database persistently
+
+    # Save in DB
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO furniture_images (id, filename, url, categoryId, furniture_name) VALUES (%s, %s, %s, %s, %s)", 
+        "INSERT INTO furniture_images (id, filename, url, categoryId, furniture_name) VALUES (%s, %s, %s, %s, %s)",
         (image_id, new_filename, image_url, categoryId, furniture_name)
     )
     conn.commit()
     cursor.close()
     conn.close()
-    
-    # Pre-embed the image so it is immediately cached for this server node
+
+    # ✅ AUTO EMBEDDING WITH REDIS
     if predictor:
         try:
+            key = f"embedding:{image_id}"
+
             image_array = cv2.imread(file_path)
             if image_array is not None:
                 image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+
                 predictor.set_image(image_array)
-                embedding_cache[image_id] = {
-                    "features": predictor.features,
+
+                cache_data = {
+                    "features": predictor.features.cpu(),  # IMPORTANT
                     "original_size": predictor.original_size,
                     "input_size": predictor.input_size
                 }
+
+                redis_client.set(
+                    key,
+                    zlib.compress(pickle.dumps(cache_data)),
+                    ex=3600
+                )
+
+                print(f"✅ Auto-embedded: {key}")
+
         except Exception as e:
-            print(f"Admin pre-embedding failed: {e}")
-            
-    return {"status": "success", "data": img_data}
+            print(f"❌ Auto embedding failed: {e}")
+
+    return {
+        "status": "success",
+        "data": {
+            "id": image_id,
+            "filename": new_filename,
+            "url": image_url,
+            "categoryId": categoryId,
+            "furniture_name": furniture_name
+        }
+    }
 
 @app.get("/furniture/images")
 async def list_furniture_images():
@@ -339,7 +357,18 @@ async def embed_image(image_id: str = Form(...)):
     if predictor is None:
         raise HTTPException(status_code=500, detail="SAM model not loaded")
 
-    # Fetch mapping exclusively from database
+    key = f"embedding:{image_id}"
+
+    # ✅ ADD TRY-CATCH HERE
+    try:
+        cached = redis_client.get(key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Redis error (GET failed)")
+
+    if cached:
+        return {"status": "success", "message": "Already cached in Redis"}
+
+    # DB fetch (same as your code)
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT filename FROM furniture_images WHERE id = %s", (image_id,))
@@ -348,43 +377,57 @@ async def embed_image(image_id: str = Form(...)):
     conn.close()
 
     if not img_data:
-        raise HTTPException(status_code=404, detail="Image not found in Database")
-        
-    if image_id not in embedding_cache:
-        file_path = os.path.join(UPLOAD_DIR, img_data["filename"])
-        if not os.path.exists(file_path):
-             raise HTTPException(status_code=404, detail="File missing on disk")
-             
-        # Read from disk
-        image = cv2.imread(file_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # Ensure correct color format
-        
-        # Calculate and cache
-        predictor.set_image(image)
-        embedding_cache[image_id] = {
-            "features": predictor.features,
-            "original_size": predictor.original_size,
-            "input_size": predictor.input_size
-        }
-        
-    return {"status": "success"}
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    file_path = os.path.join(UPLOAD_DIR, img_data["filename"])
+
+    image = cv2.imread(file_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    predictor.set_image(image)
+
+    cache_data = {
+        "features": predictor.features.cpu(),  # important fix
+        "original_size": predictor.original_size,
+        "input_size": predictor.input_size
+    }
+
+    # ✅ ADD TRY-CATCH HERE ALSO
+    try:
+        redis_client.set(
+          key,
+          zlib.compress(pickle.dumps(cache_data)),
+          ex=3600
+)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Redis error (SET failed)")
+
+    return {"status": "success", "message": "Stored in Redis"}
+
 
 @app.post("/segment")
 async def segment_image(image_id: str = Form(...), x: int = Form(...), y: int = Form(...)):
     if predictor is None:
         raise HTTPException(status_code=500, detail="SAM model not loaded")
 
-    if image_id not in embedding_cache:
-        raise HTTPException(status_code=400, detail="Image must be embedded first")
-        
-    # Reload embedding into predictor
-    cache = embedding_cache[image_id]
+    key = f"embedding:{image_id}"
+
+    try:
+        cached = redis_client.get(key)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Redis error")
+
+    if not cached:
+        raise HTTPException(status_code=400, detail="Embedding not found")
+
+    # ✅ Decompress + load
+    cache = pickle.loads(zlib.decompress(cached))
+
     predictor.features = cache["features"]
     predictor.original_size = cache["original_size"]
     predictor.input_size = cache["input_size"]
     predictor.is_image_set = True
 
-    # Predict mask
     input_point = np.array([[x, y]])
     input_label = np.array([1])
 
@@ -394,11 +437,10 @@ async def segment_image(image_id: str = Form(...), x: int = Form(...), y: int = 
         multimask_output=True,
     )
 
-    # Get the mask with highest score
     best_mask = masks[np.argmax(scores)]
-    mask_list = best_mask.tolist()
 
-    return {"mask": mask_list}
+    return {"mask": best_mask.tolist()}
+
 
 if __name__ == "__main__":
     import uvicorn
