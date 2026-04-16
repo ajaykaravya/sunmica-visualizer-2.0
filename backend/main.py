@@ -185,11 +185,29 @@ async def list_furniture_images():
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT id, filename, url, categoryId, furniture_name FROM furniture_images ORDER BY created_at DESC")
+
+        query = """
+            SELECT 
+                fi.id,
+                fi.filename,
+                fi.url,
+                fi.categoryId,
+                fi.furniture_name,
+                c.name AS category_name
+            FROM furniture_images fi
+            LEFT JOIN categories c 
+                ON fi.categoryId = c.id
+            ORDER BY fi.created_at DESC
+        """
+
+        cursor.execute(query)
         results = cursor.fetchall()
+
         cursor.close()
         conn.close()
+
         return {"status": "success", "images": results}
+
     except Exception as e:
         print(f"Error fetching images: {e}")
         return {"status": "error", "images": []}

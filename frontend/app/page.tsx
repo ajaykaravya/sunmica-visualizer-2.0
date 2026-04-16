@@ -1,6 +1,7 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useMemo } from "react";
 
 interface FurnitureImageRecord {
   id: string;
@@ -8,6 +9,7 @@ interface FurnitureImageRecord {
   url: string;
   categoryId: string;
   furniture_name: string;
+  category_name?: string;
 }
 
 interface SunmicaImageRecord {
@@ -27,6 +29,9 @@ export default function Home() {
     SunmicaImageRecord[]
   >([]);
   const [activeImageId, setActiveImageId] = useState<string | null>(null);
+  const [selectedCategoryName, setSelectedCategoryName] = useState<
+    string | null
+  >(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isEmbedding, setIsEmbedding] = useState(false);
@@ -35,6 +40,41 @@ export default function Home() {
   );
   const [history, setHistory] = useState<ImageData[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+
+  const furnitureByCategory = useMemo(() => {
+    const groups = new Map<string, FurnitureImageRecord[]>();
+    availableFurnitureImages.forEach((item) => {
+      const category = item.category_name?.trim() || "Uncategorized";
+      if (!groups.has(category)) {
+        groups.set(category, []);
+      }
+      groups.get(category)!.push(item);
+    });
+    return groups;
+  }, [availableFurnitureImages]);
+
+  const categoryNames = useMemo(
+    () => Array.from(furnitureByCategory.keys()),
+    [furnitureByCategory],
+  );
+
+  useEffect(() => {
+    if (!selectedCategoryName && categoryNames.length > 0) {
+      setSelectedCategoryName(categoryNames[0]);
+    }
+  }, [categoryNames, selectedCategoryName]);
+
+  const selectedFurnitureRecords = selectedCategoryName
+    ? (furnitureByCategory.get(selectedCategoryName) ?? [])
+    : availableFurnitureImages;
+
+  const selectedTextureObj = availableSunmicaImages.find(
+    (texture) => texture.id === selectedTextureId,
+  );
+
+  const selectedFurniture = availableFurnitureImages.find(
+    (item) => item.id === activeImageId,
+  );
 
   // Load available images on mount
   useEffect(() => {
@@ -68,18 +108,15 @@ export default function Home() {
 
   const handleSelectImage = (record: FurnitureImageRecord) => {
     setActiveImageId(record.id);
-
-    // Reset Canvas and History
     setHistory([]);
     setHistoryIndex(-1);
-
     setIsEmbedding(true);
 
     const imgPromise = new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.onload = () => resolve(img);
-      img.onerror = (e) => reject(new Error("Image load failed"));
+      img.onerror = () => reject(new Error("Image load failed"));
       img.src = record.url + "?t=" + new Date().getTime();
     });
 
@@ -95,7 +132,7 @@ export default function Home() {
 
     Promise.all([imgPromise, embedPromise])
       .then(([loadedImg]) => {
-        setImage(loadedImg); // Switches view exactly when both are strictly ready
+        setImage(loadedImg);
         setIsEmbedding(false);
       })
       .catch((err) => {
@@ -113,7 +150,6 @@ export default function Home() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Use naturalWidth/Height to prevent 0x0 collapse on headless Javascript images
     canvas.width = img.naturalWidth || img.width || 1024;
     canvas.height = img.naturalHeight || img.height || 1024;
     ctx.drawImage(img, 0, 0);
@@ -168,11 +204,11 @@ export default function Home() {
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
 
-    // Scale coordinates to original image size
-    const scaleX = image.width / canvas.width;
-    const scaleY = image.height / canvas.height;
-    const origX = Math.floor(x * scaleX);
-    const origY = Math.floor(y * scaleY);
+    const scaleX = image.naturalWidth / rect.width;
+    const scaleY = image.naturalHeight / rect.height;
+
+    const origX = Math.floor((event.clientX - rect.left) * scaleX);
+    const origY = Math.floor((event.clientY - rect.top) * scaleY);
 
     setIsLoading(true);
 
@@ -193,12 +229,6 @@ export default function Home() {
 
       const data = await response.json();
       const mask = data.mask;
-
-      // Apply texture to mask
-      const selectedTextureObj = availableSunmicaImages.find(
-        (t) => t.id === selectedTextureId,
-      );
-
       const selectedTexturePath = selectedTextureObj?.url;
       if (selectedTexturePath) {
         applyTexture(mask, selectedTexturePath);
@@ -218,25 +248,21 @@ export default function Home() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Load the texture image
     const textureImg = new Image();
     textureImg.crossOrigin = "anonymous";
     textureImg.onload = () => {
-      // Create a temporary canvas for the texture
       const textureCanvas = document.createElement("canvas");
       textureCanvas.width = canvas.width;
       textureCanvas.height = canvas.height;
       const textureCtx = textureCanvas.getContext("2d");
       if (!textureCtx) return;
 
-      // Draw texture tiled across the canvas
       for (let x = 0; x < canvas.width; x += textureImg.width) {
         for (let y = 0; y < canvas.height; y += textureImg.height) {
           textureCtx.drawImage(textureImg, x, y);
         }
       }
 
-      // Get texture image data
       const textureData = textureCtx.getImageData(
         0,
         0,
@@ -245,7 +271,6 @@ export default function Home() {
       );
       const texturePixels = textureData.data;
 
-      // Get the current canvas image data
       const currentImageData = ctx.getImageData(
         0,
         0,
@@ -254,22 +279,29 @@ export default function Home() {
       );
       const currentPixels = currentImageData.data;
 
-      // Apply texture only to masked regions
-      for (let y = 0; y < mask.length; y++) {
-        for (let x = 0; x < mask[y].length; x++) {
+      const maskHeight = mask.length;
+      const maskWidth = mask[0].length;
+
+      const scaleX = canvas.width / maskWidth;
+      const scaleY = canvas.height / maskHeight;
+
+      for (let y = 0; y < maskHeight; y++) {
+        for (let x = 0; x < maskWidth; x++) {
           if (mask[y][x]) {
-            const index = (y * canvas.width + x) * 4;
-            // Copy texture pixel to current image
-            currentPixels[index] = texturePixels[index]; // R
-            currentPixels[index + 1] = texturePixels[index + 1]; // G
-            currentPixels[index + 2] = texturePixels[index + 2]; // B
-            currentPixels[index + 3] = 255; // A (fully opaque)
+            const canvasX = Math.floor(x * scaleX);
+            const canvasY = Math.floor(y * scaleY);
+
+            const index = (canvasY * canvas.width + canvasX) * 4;
+
+            currentPixels[index] = texturePixels[index];
+            currentPixels[index + 1] = texturePixels[index + 1];
+            currentPixels[index + 2] = texturePixels[index + 2];
+            currentPixels[index + 3] = 255;
           }
         }
       }
 
       ctx.putImageData(currentImageData, 0, 0);
-
       const savedData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       setHistoryIndex((prevIdx) => {
         setHistory((prevHist) => {
@@ -284,175 +316,212 @@ export default function Home() {
   };
 
   return (
-    <div>
-      <div className="min-h-screen bg-gray-100 p-8">
-        <div className="max-w-6xl mx-auto">
-          {!image ? (
-            <div className="bg-white p-6 rounded-lg shadow relative">
-              {isEmbedding && (
-                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center rounded-lg">
-                  <div className="text-4xl mb-4 animate-spin">⏳</div>
-                  <h3 className="text-2xl font-bold text-gray-800">
-                    Preparing AI Model
-                  </h3>
-                  <p className="text-gray-600 mt-2 text-lg font-medium">
-                    Extracting furniture mapping features...
-                  </p>
-                  <p className="text-gray-500 mt-1">
-                    (This one-time setup may take a few seconds)
-                  </p>
-                </div>
-              )}
-              <h2 className="text-xl font-semibold mb-4 border-b pb-2">
-                Available Furniture Templates
-              </h2>
-              {availableFurnitureImages.length === 0 ? (
-                <div className="text-center text-gray-500 py-12">
-                  <p>No images available.</p>
-                  <p className="text-sm mt-2">
-                    Visit the Admin panel at{" "}
-                    <a href="/admin" className="text-blue-500 underline">
-                      /admin
-                    </a>{" "}
-                    to upload images first.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {availableFurnitureImages.map((img) => (
-                    <div
-                      key={img.id}
-                      onClick={() => handleSelectImage(img)}
-                      className="cursor-pointer border-2 border-transparent hover:border-blue-500 rounded-lg overflow-hidden transition-all shadow-sm group bg-white"
-                    >
-                      <div className="relative aspect-square sm:aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
-                        <img
-                          src={img.url}
-                          alt="Furniture"
-                          className="w-full h-full object-contain p-2 group-hover:scale-105 transition-transform duration-300"
-                        />
-                        <div className="absolute inset-0 bg-transparent group-hover:bg-black/10 transition-all flex items-center justify-center">
-                          <span className="text-white opacity-0 group-hover:opacity-100 font-medium bg-black/60 px-4 py-2 rounded shadow-sm backdrop-blur-sm">
-                            Select
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+    <div className="min-h-screen bg-gray-100 p-8">
+      <div className="max-w-[1400px] mx-auto grid gap-6 lg:grid-cols-12">
+        <aside className="lg:col-span-3 space-y-4">
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-xl font-semibold mb-4">Furniture Library</h2>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {categoryNames.map((category) => (
+                <button
+                  key={category}
+                  onClick={() => setSelectedCategoryName(category)}
+                  className={`rounded-full px-4 py-2 text-sm font-medium transition-all border ${
+                    selectedCategoryName === category
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-200"
+                  }`}
+                >
+                  {category}
+                </button>
+              ))}
             </div>
-          ) : (
-            <div>
-              <div className="flex justify-between items-center mb-4">
+
+            {selectedFurnitureRecords.length === 0 ? (
+              <div className="text-center text-gray-500 py-10">
+                No furniture available in this category.
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {selectedFurnitureRecords.map((img) => (
+                  <button
+                    key={img.id}
+                    onClick={() => handleSelectImage(img)}
+                    className={`group rounded-xl overflow-hidden border transition-all text-left ${
+                      activeImageId === img.id
+                        ? "border-blue-500 shadow-sm"
+                        : "border-gray-200 hover:border-blue-400"
+                    }`}
+                  >
+                    <div className="relative aspect-square bg-gray-50 flex items-center justify-center overflow-hidden">
+                      <img
+                        src={img.url}
+                        alt={img.furniture_name}
+                        className="w-full h-full object-contain p-2"
+                      />
+                    </div>
+                    <div className="p-3">
+                      <p className="text-sm font-medium text-gray-800">
+                        {img.furniture_name}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <main className="lg:col-span-6 space-y-4">
+          <div className="bg-white rounded-xl shadow p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-semibold">Preview</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {selectedFurniture?.furniture_name ||
+                    "Select furniture from the left to load the preview."}
+                </p>
+              </div>
+              {activeImageId && (
                 <button
                   onClick={() => {
                     setImage(null);
                     setActiveImageId(null);
                   }}
-                  className="text-blue-600 hover:text-blue-800 font-medium flex items-center gap-2 transition-colors"
+                  className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                 >
-                  ← Back to Gallery
+                  Clear selection
                 </button>
-              </div>
+              )}
+            </div>
 
-              <div className="mb-6 p-4 bg-white rounded-lg shadow">
-                <h2 className="text-lg font-semibold mb-3">
-                  Select Sunmica Texture
-                </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {availableSunmicaImages.map((texture) => (
-                    <button
-                      key={texture.id}
-                      onClick={() => setSelectedTextureId(texture.id)}
-                      disabled={isEmbedding}
-                      className={`p-3 rounded-lg border-2 transition-all flex flex-col items-center ${
-                        isEmbedding ? "opacity-50 cursor-not-allowed " : ""
-                      }${
-                        selectedTextureId === texture.id
-                          ? "border-blue-500 bg-blue-50"
-                          : "border-gray-200 bg-gray-50 hover:border-gray-300"
-                      }`}
-                    >
-                      <img
-                        src={texture.url}
-                        alt={texture.name}
-                        className="w-full h-20 object-cover rounded-md mb-2 border"
-                      />
-                      <div className="text-xs font-medium text-center">
-                        {texture.name}
-                      </div>
-                    </button>
-                  ))}
+            <div className="flex justify-center items-center relative rounded-2xl overflow-hidden border border-gray-200 bg-gray-50 min-h-[420px]">
+              {!image && (
+                <div className="h-full flex flex-col items-center justify-center text-center px-6 py-12">
+                  <div className="text-3xl mb-3">🖼️</div>
+                  <p className="text-lg font-semibold mb-2">
+                    No furniture selected
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    Pick a category and tap a furniture template on the left.
+                  </p>
                 </div>
-              </div>
+              )}
 
-              <div className="relative bg-white p-2 rounded-lg shadow flex justify-center">
+              {image && (
                 <canvas
                   ref={canvasRef}
                   onClick={!isEmbedding ? handleCanvasClick : undefined}
-                  className={`border border-gray-300 max-w-full h-auto ${isEmbedding ? "cursor-wait opacity-70" : "cursor-crosshair"}`}
+                  className={` max-w-full h-auto ${isEmbedding ? "cursor-wait opacity-70" : "cursor-crosshair"}`}
                   style={{
                     display: image ? "block" : "none",
                     maxHeight: "70vh",
                   }}
                 />
-                {isLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-lg backdrop-blur-sm">
-                    <div className="text-white text-center flex flex-col items-center">
-                      <div className="text-4xl mb-3 animate-spin">⌛</div>
-                      <div className="text-xl font-bold">
-                        Applying Texture...
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              )}
 
-              <div className="flex justify-center gap-4 mt-6">
-                <button
-                  onClick={handleUndo}
-                  disabled={historyIndex <= 0 || isEmbedding || isLoading}
-                  className={`px-6 py-2 rounded-lg font-medium transition-all shadow-sm flex items-center gap-2 ${
-                    historyIndex <= 0 || isEmbedding || isLoading
-                      ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
-                      : "bg-white text-gray-700 hover:bg-gray-50 border border-gray-300 hover:shadow"
-                  }`}
-                >
-                  <span>↩️</span> Undo
-                </button>
-                <button
-                  onClick={handleRefresh}
-                  disabled={historyIndex <= 0 || isEmbedding || isLoading}
-                  className={`px-6 py-2 rounded-lg font-medium transition-all shadow-sm flex items-center gap-2 ${
-                    historyIndex <= 0 || isEmbedding || isLoading
-                      ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
-                      : "bg-white text-red-600 hover:bg-red-50 border border-red-200 hover:shadow"
-                  }`}
-                >
-                  <span>🔄</span> Reset
-                </button>
-                <button
-                  onClick={handleRedo}
-                  disabled={
-                    historyIndex >= history.length - 1 ||
-                    isEmbedding ||
-                    isLoading
-                  }
-                  className={`px-6 py-2 rounded-lg font-medium transition-all shadow-sm flex items-center gap-2 ${
-                    historyIndex >= history.length - 1 ||
-                    isEmbedding ||
-                    isLoading
-                      ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
-                      : "bg-white text-gray-700 hover:bg-gray-50 border border-gray-300 hover:shadow"
-                  }`}
-                >
-                  Redo <span>↪️</span>
-                </button>
-              </div>
+              {(isEmbedding || isLoading) && (
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center">
+                  <div className="text-4xl mb-3 animate-spin">⌛</div>
+                  <div className="text-lg font-semibold text-gray-800">
+                    {isEmbedding
+                      ? "Preparing AI model..."
+                      : "Applying texture..."}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-xl font-semibold mb-4">Edit Actions</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <button
+                onClick={handleUndo}
+                disabled={historyIndex <= 0 || isEmbedding || isLoading}
+                className={`w-full rounded-xl px-4 py-3 font-medium transition-all border ${
+                  historyIndex <= 0 || isEmbedding || isLoading
+                    ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                    : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                }`}
+              >
+                ↩️ Undo
+              </button>
+              <button
+                onClick={handleRefresh}
+                disabled={historyIndex <= 0 || isEmbedding || isLoading}
+                className={`w-full rounded-xl px-4 py-3 font-medium transition-all border ${
+                  historyIndex <= 0 || isEmbedding || isLoading
+                    ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                    : "bg-white text-red-600 border-red-200 hover:bg-red-50"
+                }`}
+              >
+                🔄 Reset
+              </button>
+              <button
+                onClick={handleRedo}
+                disabled={
+                  historyIndex >= history.length - 1 || isEmbedding || isLoading
+                }
+                className={`w-full rounded-xl px-4 py-3 font-medium transition-all border ${
+                  historyIndex >= history.length - 1 || isEmbedding || isLoading
+                    ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                    : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                }`}
+              >
+                Redo ↪️
+              </button>
+            </div>
+          </div>
+        </main>
+
+        <aside className="lg:col-span-3 space-y-4">
+          <div className="bg-white rounded-xl shadow p-5">
+            <h2 className="text-xl font-semibold mb-4">Available Sunmica</h2>
+            {selectedTextureObj ? (
+              <div className="mb-4 rounded-2xl overflow-hidden border border-gray-200">
+                <img
+                  src={selectedTextureObj.url}
+                  alt={selectedTextureObj.name}
+                  className="w-full h-40 object-cover"
+                />
+                <div className="p-4 bg-gray-50">
+                  <p className="text-sm font-medium text-gray-900">
+                    {selectedTextureObj.name}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-4 rounded-2xl border border-dashed border-gray-300 py-8 px-4 text-center text-sm text-gray-500">
+                Select a texture to preview here.
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              {availableSunmicaImages.map((texture) => (
+                <button
+                  key={texture.id}
+                  onClick={() => setSelectedTextureId(texture.id)}
+                  disabled={isEmbedding}
+                  className={`group rounded-2xl overflow-hidden border transition-all ${
+                    selectedTextureId === texture.id
+                      ? "border-blue-500 shadow-sm"
+                      : "border-gray-200 hover:border-blue-400"
+                  } ${isEmbedding ? "opacity-50 cursor-not-allowed" : "bg-white"}`}
+                >
+                  <img
+                    src={texture.url}
+                    alt={texture.name}
+                    className="w-full h-24 object-cover"
+                  />
+                  <div className="p-3 text-xs font-medium text-gray-700 text-center">
+                    {texture.name}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   );
