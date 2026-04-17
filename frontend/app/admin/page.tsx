@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { uploadFurniture } from "@/lib/api/furniture";
+import { showSuccessToast, showErrorToast } from "@/lib/toast";
 
 export default function AdminPage() {
   const [isUploading, setIsUploading] = useState(false);
@@ -12,19 +14,21 @@ export default function AdminPage() {
     if (!file) return;
 
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/furniture/upload", {
-        method: "POST",
-        body: formData,
+      await uploadFurniture({
+        furniture_name: file.name.replace(/\.[^/.]+$/, ""), // Remove file extension
+        categoryId: "default", // You can modify this as needed
+        file: file,
       });
-      if (!response.ok) throw new Error("Upload failed");
-      alert("Image uploaded successfully!");
+
+      showSuccessToast("Image uploaded successfully!");
+      event.target.value = ""; // Reset file input
     } catch (error) {
-      console.error(error);
-      alert("Failed to upload image.");
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to upload image";
+      showErrorToast(errorMessage);
+      console.error("Upload error:", error);
     } finally {
       setIsUploading(false);
     }
@@ -47,8 +51,9 @@ export default function AdminPage() {
             disabled={isUploading}
             className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 mb-4"
           />
+
           {isUploading && (
-            <p className="text-green-600 font-medium">Uploading...</p>
+            <p className="text-blue-600 font-medium">Uploading...</p>
           )}
         </div>
       </div>

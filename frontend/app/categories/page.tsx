@@ -1,13 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  TextField,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+} from "@mui/material";
 import { useForm } from "react-hook-form";
-
-interface Category {
-  id: string;
-  name: string;
-  created_at?: string;
-}
+import {
+  fetchCategories,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  Category,
+} from "@/lib/api/categories";
+import { showSuccessToast, showErrorToast } from "@/lib/toast";
 
 interface CategoryFormInputs {
   name: string;
@@ -16,8 +26,8 @@ interface CategoryFormInputs {
 export default function CategoryManager() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [open, setOpen] = useState(false);
 
   const {
     register,
@@ -25,60 +35,46 @@ export default function CategoryManager() {
     reset,
     setValue,
     formState: { errors },
-  } = useForm<CategoryFormInputs>();
+  } = useForm<CategoryFormInputs>({
+    defaultValues: { name: "" },
+  });
 
-  const fetchCategories = async () => {
+  const loadCategories = async () => {
     try {
-      const resp = await fetch("http://127.0.0.1:8000/categories");
-      const data = await resp.json();
-      if (data.status === "success") {
-        setCategories(data.categories);
-      }
-    } catch (e) {
-      console.error(e);
+      const data = await fetchCategories();
+      setCategories(data);
+    } catch (error) {
+      console.error("Failed to load categories:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to load categories";
+      showErrorToast(errorMessage);
     }
   };
 
   useEffect(() => {
-    fetchCategories();
+    loadCategories();
   }, []);
 
   const onSubmit = async (data: CategoryFormInputs) => {
-    setErrorMsg(null);
     setIsLoading(true);
 
-    const nameToSubmit = data.name.trim();
-
-    if (!nameToSubmit) {
-      setErrorMsg("Category name cannot be empty");
-      setIsLoading(false);
-      return;
-    }
-
     try {
-      const url = editingId
-        ? `http://127.0.0.1:8000/categories/${editingId}`
-        : "http://127.0.0.1:8000/categories";
-
-      const method = editingId ? "PUT" : "POST";
-
-      const resp = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: nameToSubmit }),
-      });
-
-      const result = await resp.json();
-
-      if (!resp.ok) {
-        setErrorMsg(result.detail || "An error occurred");
+      if (editingId) {
+        await updateCategory(editingId, data.name);
+        showSuccessToast("Category updated successfully");
       } else {
-        await fetchCategories();
-        reset();
-        setEditingId(null);
+        await createCategory(data.name);
+        showSuccessToast("Category created successfully");
       }
-    } catch (e: any) {
-      setErrorMsg("Failed to save category");
+
+      await loadCategories();
+      reset();
+      setEditingId(null);
+      setOpen(false);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to save category";
+      showErrorToast(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -87,86 +83,79 @@ export default function CategoryManager() {
   const handleEdit = (cat: Category) => {
     setEditingId(cat.id);
     setValue("name", cat.name);
-    setErrorMsg(null);
+    setOpen(true); // ✅ open modal for edit
   };
 
-  const handleCancelEdit = () => {
+  const handleAdd = () => {
     setEditingId(null);
     reset();
-    setErrorMsg(null);
+    setOpen(true);
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this category?")) return;
+    if (!confirm("Delete this category?")) return;
+
     try {
-      const resp = await fetch(`http://127.0.0.1:8000/categories/${id}`, {
-        method: "DELETE",
-      });
-      if (resp.ok) {
-        await fetchCategories();
-      } else {
-        const result = await resp.json();
-        alert(result.detail || "Error deleting category");
-      }
-    } catch (e) {
-      alert("Failed to delete category");
+      await deleteCategory(id);
+      showSuccessToast("Category deleted successfully");
+      await loadCategories();
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Delete failed";
+      showErrorToast(errorMessage);
     }
   };
 
   return (
-    <div className="bg-white p-6 rounded-lg shadow w-full text-left flex flex-col h-[500px]">
-      <h2 className="text-xl font-semibold mb-4">Manage Categories</h2>
+    <div className="bg-white p-6 rounded-lg shadow w-full flex flex-col h-[500px]">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-semibold">Manage Categories</h2>
 
-      {errorMsg && (
-        <div className="mb-4 text-red-600 bg-red-50 p-2 rounded">
-          {errorMsg}
-        </div>
-      )}
+        <Button variant="contained" onClick={handleAdd}>
+          Add Category
+        </Button>
+      </div>
 
-      <form
-        onSubmit={handleSubmit(onSubmit)}
-        className="mb-6 flex flex-col gap-2 shrink-0"
+      {/* Modal */}
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        fullWidth
+        maxWidth="xs"
       >
-        <div>
-          <input
-            {...register("name", {
-              required: "Category name is required",
-              validate: (value) =>
-                value.trim().length > 0 ||
-                "Category name cannot be empty spaces",
-            })}
-            placeholder="Category Name"
-            className="border p-2 rounded w-full"
-            disabled={isLoading}
-          />
-          {errors.name && (
-            <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>
-          )}
-        </div>
+        <DialogTitle>
+          {editingId ? "Edit Category" : "Add Category"}
+        </DialogTitle>
 
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-          >
-            {editingId ? "Update Category" : "Add Category"}
-          </button>
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <DialogContent className="flex flex-col gap-4 mt-2">
+            <TextField
+              {...register("name", {
+                required: "Category name is required",
+                validate: (value) =>
+                  value.trim().length > 0 || "Category name cannot be empty",
+              })}
+              label="Category Name"
+              size="small"
+              error={!!errors.name}
+              helperText={errors.name?.message}
+              fullWidth
+            />
+          </DialogContent>
 
-          {editingId && (
-            <button
-              type="button"
-              onClick={handleCancelEdit}
-              disabled={isLoading}
-              className="bg-gray-300 text-gray-800 px-4 py-2 rounded hover:bg-gray-400"
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-      </form>
+          <DialogActions>
+            <Button onClick={() => setOpen(false)}>Cancel</Button>
 
-      <div className="flex-1 overflow-y-auto border border-gray-200 rounded divide-y hide-scrollbar">
+            <Button type="submit" variant="contained" disabled={isLoading}>
+              {isLoading ? "Saving..." : editingId ? "Update" : "Add"}
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* List */}
+      <div className="flex-1 overflow-y-auto border rounded divide-y">
         {categories.length === 0 ? (
           <p className="p-4 text-gray-500 text-center">No categories found.</p>
         ) : (
@@ -175,22 +164,19 @@ export default function CategoryManager() {
               key={cat.id}
               className="flex justify-between items-center p-3 hover:bg-gray-50"
             >
-              <span
-                className="font-medium text-gray-800 truncate"
-                title={cat.name}
-              >
-                {cat.name}
-              </span>
-              <div className="flex gap-2 shrink-0 ml-4">
+              <span className="font-medium truncate">{cat.name}</span>
+
+              <div className="flex gap-2">
                 <button
                   onClick={() => handleEdit(cat)}
-                  className="text-sm text-blue-600 hover:text-blue-800 px-2 py-1 bg-blue-50 rounded"
+                  className="text-blue-600 bg-blue-50 px-2 py-1 rounded"
                 >
                   Edit
                 </button>
+
                 <button
                   onClick={() => handleDelete(cat.id)}
-                  className="text-sm text-red-600 hover:text-red-800 px-2 py-1 bg-red-50 rounded"
+                  className="text-red-600 bg-red-50 px-2 py-1 rounded"
                 >
                   Delete
                 </button>
