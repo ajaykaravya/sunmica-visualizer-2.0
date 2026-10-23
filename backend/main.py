@@ -179,7 +179,7 @@ async def upload_furniture(
                 redis_client.set(
                     key,
                     zlib.compress(pickle.dumps(cache_data)),
-                    ex=3600
+                    ex=36000
                 )
 
                 print(f"✅ Auto-embedded: {key}")
@@ -397,7 +397,7 @@ async def embed_image(image_id: str = Form(...)):
         redis_client.set(
           key,
           zlib.compress(pickle.dumps(cache_data)),
-          ex=3600
+          ex=36000
 )
     except Exception as e:
         raise HTTPException(status_code=500, detail="Redis error (SET failed)")
